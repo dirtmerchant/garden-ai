@@ -683,12 +683,39 @@ Configure the webhook target either:
 
 **Done when**: uploading an object to `garden-images` triggers an HTTP POST to the analyzer.
 
-## Session L3 — Pi capture script
+## Session L3 — Pi capture script + NAS ingest
 
-- `pi/capture.py`: capture image, key it `YYYY/MM/DD/HHMMSS.jpg` (UTC), upload to MinIO via the S3 API (`boto3` or `minio` client).
-- Target: `minio.garden.svc.cluster.local:9000` from in-cluster, or the Tailscale-reachable IP from the Pi (if Pi is outside the cluster).
+### Hardware constraints (resolved)
+
+- **Board**: Raspberry Pi Model A+ v1 — single-core ARMv6, 512MB RAM, single USB port, no onboard networking. USB WiFi dongle required.
+- **Camera**: Naturebytes Wildlife Camera Kit module (CSI ribbon cable, not an official Pi camera). Use the legacy camera stack (`raspistill`) or `libcamera-still` depending on the OS image — verify which is available on the Pi's Raspbian version.
+- **PIR sensor**: wired but unused; captures are cron-scheduled.
+
+### Capture script
+
+`pi/capture.py`: capture a still, key it `YYYY/MM/DD/HHMMSS.jpg` (UTC), write to the NAS landing zone.
+
+- Invoke the camera via subprocess (`raspistill -o <path>` or `libcamera-still -o <path>`).
+- Write directly to a mounted NAS share (NFS or SMB from the Synology DS218+, e.g. mounted at `/mnt/garden-landing`).
+- No MinIO or S3 client needed on the Pi — the Pi just writes a file to the NAS mount.
 - `crontab.example` for capture interval; pinned `requirements.txt`.
-- **Done when**: running the script puts a correctly-keyed object in MinIO `garden-images`.
+- Keep the script minimal — this Pi has 512MB RAM and a single core.
+
+### NAS landing zone → MinIO ingest
+
+A k3s-side ingest process watches the NAS landing zone and moves images into MinIO `garden-images`:
+
+- Option A: **CronJob** in k3s that periodically syncs the landing zone to MinIO (e.g. `mc mirror`), then deletes the source files.
+- Option B: **Inotify/polling sidecar** that watches the NFS mount and uploads to MinIO on arrival.
+- Option A is simpler and sufficient given capture intervals (every few minutes at most).
+
+The NAS landing zone NFS share needs its own PV/PVC in the `garden` namespace (separate from MinIO's NFS share), or the ingest job can access the NAS share directly.
+
+### Open decision
+
+NAS as transient staging buffer (MinIO authoritative, landing zone cleared after ingest) vs. NAS as authoritative store (MinIO dropped, analyzer reads from NAS directly). Current plan assumes the staging-buffer approach. Revisit if MinIO adds unnecessary complexity for the image volumes involved.
+
+- **Done when**: running `capture.py` on the Pi writes a correctly-keyed image to the NAS landing zone, and the ingest process moves it into MinIO `garden-images`.
 
 ## Session L4 — Analyzer: analysis + persistence
 

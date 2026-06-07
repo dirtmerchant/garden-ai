@@ -36,6 +36,24 @@ Pi ──▶  │ capture ▶ MinIO (images) ▶ analyzer (green-pixel) ▶ Post
 
 ## Project facts
 
+### Capture node (Raspberry Pi)
+
+- **Board**: Raspberry Pi Model A+ v1 — single-core ARMv6, 512MB RAM, single USB port, no onboard networking. USB WiFi dongle for connectivity.
+- **Camera**: Naturebytes Wildlife Camera Kit module (not an official Pi camera), connected via CSI ribbon cable. Adequate for green-pixel-ratio heuristic; note possible color-calibration inconsistency if/when Vertex AI classification comes online.
+- **PIR sensor**: physically wired during kit assembly but **unused in software**. Captures are cron-scheduled, not motion-triggered.
+- **Power**: external 5V 2.5A+ via micro-USB (not included in kit).
+- **Role**: capture node only — grab a still and ship it to the NAS landing zone. No processing on the Pi.
+
+### Ingestion path
+
+```
+Pi (capture + key) ──▶ NAS landing zone ──▶ k3s (MinIO + analyzer)
+```
+
+- Image key `YYYY/MM/DD/HHMMSS.jpg` (UTC) is set at capture time on the Pi, survives the hop through the NAS into MinIO/GCS.
+- Pi writes to a NAS landing zone (e.g. NFS or SMB share on the Synology DS218+). A k3s-side ingest process moves images from the landing zone into MinIO `garden-images`.
+- **Open decision**: NAS as transient staging buffer (MinIO authoritative, landing zone cleared after ingest) vs. NAS as authoritative store (MinIO dropped, analyzer reads from NAS directly). Affects sync contract and cross-tier join story. Current plan assumes the staging-buffer approach (MinIO authoritative).
+
 ### k3s home lab
 
 #### Hardware
