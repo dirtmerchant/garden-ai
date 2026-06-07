@@ -37,12 +37,50 @@ Pi ──▶  │ capture ▶ MinIO (images) ▶ analyzer (green-pixel) ▶ Post
 ## Project facts
 
 ### k3s home lab
-- Cluster: 3× Intel NUC, 32GB RAM each (96GB total), k3s.
+
+#### Hardware
+- 3× Intel NUC7i7BNH, 32GB RAM / 256GB SSD each (96GB / 768GB total), Ubuntu 24.04.4 LTS.
+- k3s v1.34.3+k3s1. nuc1 (192.168.1.20) is server (control-plane + etcd); nuc2 (.21) and nuc3 (.22) are agents.
+- Synology DS218+ NAS (192.168.1.10): 6GB RAM, ~11TB RAID 1 + 15TB USB backup. Provides NFS-backed storage for MinIO (garden image history).
+
+#### Network
+- Flat LAN 192.168.1.0/24. Gateway/DHCP: Google Fiber router at .1.
+- **MetalLB** L2 load balancer, IP pool 192.168.1.200–250.
+- **Traefik** ingress (192.168.1.202) with wildcard TLS cert for `*.homelab.bertbullough.com` (self-signed CA via cert-manager).
+- **Pi-hole** DNS at 192.168.1.200 with custom dnsmasq records for `*.homelab.bertbullough.com`.
+- **Tailscale** subnet router advertises 192.168.1.0/24 for remote access.
+- UFW on all nodes; SSH key-only auth.
+
+#### Storage
+- **Longhorn** is the default StorageClass (3× replica distributed block storage). Used for Postgres PVC.
+- **local-path** also available (node-pinned, no replication) — used by some existing services.
+- **Synology NAS** (192.168.1.10) via NFS for MinIO image storage — ~11TB RAID 1 capacity. NFS PV created by Terraform; PVC binds to it. See PLAN-local.md for NFS share setup.
+
+#### GitOps & secrets
+- **ArgoCD** with app-of-apps pattern, auto-syncs from `main` branch. Pruning + self-heal enabled, sync waves for ordering.
+- **External Secrets Operator (ESO)** with 1Password SDK provider — no secrets in the repo. Garden bot secrets (MinIO creds, Postgres password, GCP SA key) should follow this pattern.
+
+#### Existing workloads (coexist with garden bot)
+| Service | Node affinity | Resources (request → limit) | PVC |
+|---------|---------------|----------------------------|-----|
+| ArgoCD | none | 200m/448Mi → 1/1.5Gi | — |
+| Prometheus | nuc1 (local-path) | 200m/512Mi → 1/2Gi | 20Gi |
+| Grafana | none | 100m/128Mi → 300m/256Mi | — |
+| Ollama | nuc2 (local-path) | 1/3Gi → 4/6Gi | 20Gi |
+| Home Assistant | nuc3 (local-path) | 200m/256Mi → 1/1Gi | 10Gi |
+| Pi-hole | nuc3 (local-path) | 100m/128Mi → 300m/256Mi | 1.5Gi |
+| Traefik | none | 100m/128Mi → 300m/256Mi | — |
+| Tailscale | none | 50m/64Mi → 200m/128Mi | — |
+
+Substantial headroom remains for garden bot services (MinIO, Postgres, analyzer, Grafana).
+
+#### Garden bot services (to deploy)
+
 - Object store: **MinIO** (S3-compatible), bucket `garden-images`.
 - Metrics DB: **Postgres**, database `garden`, table `plant_metrics`.
-- Dashboard: **Grafana** on the live Postgres data.
+- Dashboard: **Grafana** (dedicated instance in `garden` namespace).
 - Analyzer: small Python service, MinIO bucket-notification driven.
-- IaC/GitOps: Terraform (kubernetes + helm providers) or Argo CD/Flux — see PLAN-local.md.
+- IaC: Terraform bootstraps namespace + ArgoCD Application; ArgoCD syncs workload manifests. See PLAN-local.md.
 
 ### GCP
 - Project ID: `garden-ai-467116`
@@ -106,8 +144,8 @@ In BigQuery, partition by `DATE(capture_time)`. In Postgres, index on `capture_t
 │   │   ├── sync.py             # metrics→BQ, sampled images→GCS
 │   │   ├── requirements.txt
 │   │   └── tests/test_analysis.py
-│   ├── manifests/              # k8s: MinIO, Postgres, Grafana, analyzer
-│   └── terraform/              # k8s + helm providers (or argocd/ dir if GitOps)
+│   ├── terraform/              # bootstrap: namespace + ArgoCD Application (run once)
+│   └── manifests/              # k8s workloads: ArgoCD syncs from here
 └── cloud/                      # GCP tier
     └── terraform/
         ├── main.tf             # GCS bucket, BQ dataset+table, IAM/SA for push
@@ -126,9 +164,13 @@ In BigQuery, partition by `DATE(capture_time)`. In Postgres, index on `capture_t
 - State backend: GCS, bucket `garden-ai-467116-tfstate`, prefix `garden-monitor`. Create the state bucket once before `terraform init`.
 - Provisions only the cloud tier: GCS bucket, BigQuery dataset+table, and a least-privilege service account the local analyzer authenticates as to push.
 
-### Local Terraform / GitOps
-- Provision MinIO, Postgres, Grafana, and the analyzer via Helm/manifests.
-- Prefer a GitOps tool (Argo CD or Flux) if you want that on the portfolio; otherwise Terraform kubernetes+helm providers. Pick in PLAN-local.md.
+### Local deployment (Terraform + ArgoCD)
+
+- **Terraform** (`local/terraform/`) bootstraps the platform: creates the `garden` namespace, an NFS PersistentVolume for MinIO (backed by the Synology NAS), and an ArgoCD `Application` resource pointing to `local/manifests/` in this repo. Run once with `terraform apply`. State is local.
+- **ArgoCD** syncs `local/manifests/` — all application workloads (deployments, services, PVCs, ExternalSecrets, IngressRoutes, NetworkPolicies). Automated sync with prune + self-heal.
+- Secrets via External Secrets Operator (1Password `Homelab` vault, `ClusterSecretStore` named `onepassword`).
+- MinIO storage: NFS PV backed by Synology NAS. Postgres: Longhorn PVC (replicated SSD). Traefik IngressRoutes for dashboard access.
+- No changes to the homelab repo required.
 
 ## Common commands
 
@@ -153,14 +195,16 @@ terraform apply         # provision GCS, BigQuery, service account
 
 State backend: GCS bucket `garden-ai-467116-tfstate`, prefix `garden-monitor`.
 
-### Terraform — local tier
+### Terraform — local tier (bootstrap)
 
 ```bash
 cd local/terraform
 terraform init
 terraform plan
-terraform apply         # provision MinIO, Postgres, Grafana, analyzer on k3s
+terraform apply         # creates namespace + ArgoCD Application (run once)
 ```
+
+State is local. ArgoCD then syncs `local/manifests/` automatically.
 
 ### Pi capture (manual run)
 
