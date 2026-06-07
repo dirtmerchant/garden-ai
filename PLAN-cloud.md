@@ -2,12 +2,19 @@
 
 Additive analytics and heavy-ML tier. Receives a metrics stream and a sampled image subset from the local tier (never writes back). Read `CLAUDE.md` first — especially the sync contract, which this tier consumes.
 
-Build **after** the local tier is working — except Session C1, which must exist before local Session L5 (the analyzer needs the service account and targets to push to).
+Build **after** the local tier is working — except Session C1, which must exist before local Session L6 (the analyzer needs the service account and targets to push to).
 
-## Prerequisites (one-time, before Session 1)
+## Prerequisites (one-time, before Session C1)
+
 - `gcloud` authenticated against project `garden-ai-467116`.
 - APIs enabled: Cloud Storage, BigQuery, and (for the stretch goal) Vertex AI.
-- Terraform state bucket created: `garden-ai-467116-tfstate`.
+- Terraform state bucket created:
+  ```bash
+  gcloud storage buckets create gs://garden-ai-467116-tfstate \
+    --project=garden-ai-467116 \
+    --location=us-central1 \
+    --uniform-bucket-level-access
+  ```
 
 ## Session C1 — Provision the push targets (do this before local L5)
 - Terraform in `cloud/terraform/`: GCS bucket `garden-monitor-images`; BigQuery dataset `garden_monitor` + table `plant_metrics` (schema in CLAUDE.md, partitioned by `DATE(capture_time)`); a least-privilege service account the local analyzer authenticates as (object create on the bucket, insert on the table — nothing more).

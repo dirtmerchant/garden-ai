@@ -7,7 +7,8 @@ Build this tier **first**. It is a complete, useful system on its own; the cloud
 ## Design decisions (settled)
 
 - **IaC split**: Terraform bootstraps the platform (namespace, ArgoCD Application); ArgoCD manages the application workloads. Standard pattern — Terraform handles what ArgoCD can't self-bootstrap, ArgoCD handles everything that benefits from continuous reconciliation.
-- **Terraform** lives in `local/terraform/`. Uses the `kubernetes` provider against the k3s cluster. Creates the `garden` namespace and the ArgoCD `Application` resource that points ArgoCD at this repo's `local/manifests/`. No homelab repo changes needed.
+- **Terraform** lives in `local/terraform/`. Uses the `kubernetes` provider against the k3s cluster. Creates the `garden` namespace, NFS PV, ArgoCD repo credential, and the ArgoCD `Application` resource. No homelab repo changes needed.
+- **Container registry**: Docker Registry on the Synology NAS at `192.168.1.10:5000`. Runs as a container via Synology Container Manager. k3s nodes configured via `/etc/rancher/k3s/registries.yaml` to allow it as an HTTP registry. Analyzer images pushed here.
 - **ArgoCD** syncs `local/manifests/` — deployments, services, PVCs, ExternalSecrets, ConfigMaps, IngressRoutes, NetworkPolicies. Automated sync with prune + self-heal, matching the existing cluster pattern.
 - **Grafana**: Dedicated instance for the garden bot (not a datasource on the cluster Grafana). Keeps this project fully self-contained.
 - **Storage**: MinIO backed by the **Synology NAS** (192.168.1.10) via NFS — ~11TB RAID 1 capacity, more than enough for the full image history. Terraform creates the NFS PersistentVolume (infrastructure concern); ArgoCD manages the PVC. Postgres stays on **Longhorn** (small dataset, benefits from SSD latency, 3× replication).
@@ -22,14 +23,23 @@ Build this tier **first**. It is a complete, useful system on its own; the cloud
 - ArgoCD running in the cluster (already deployed via the homelab repo).
 - External Secrets Operator + `ClusterSecretStore` named `onepassword` (1Password `Homelab` vault) — already deployed.
 - **Synology NAS NFS share**: create a shared folder (e.g. `/volume1/garden-minio`) on the DS218+ (192.168.1.10). Enable NFS, grant read/write access to the NUC IPs (192.168.1.20–22). Set `squash` to `no_root_squash` or map to a UID/GID matching MinIO's container user (1000:1000).
-- Create 1Password items in the `Homelab` vault:
+- **Docker Registry on NAS**: run the `registry:2` container via Synology Container Manager on port 5000. Map a volume for image storage (e.g. `/volume1/docker-registry:/var/lib/registry`). Configure each k3s node's `/etc/rancher/k3s/registries.yaml`:
+  ```yaml
+  mirrors:
+    "192.168.1.10:5000":
+      endpoint:
+        - "http://192.168.1.10:5000"
+  ```
+  Then restart k3s on each node (`sudo systemctl restart k3s` / `k3s-agent`).
+- Create 1Password items in the `Homelab` vault (if not already present):
   - `minio` — fields: `root-user`, `root-password`
   - `garden-postgres` — fields: `postgres-password`
   - `garden-gcp-sa` — fields: `sa-key` (JSON key for the GCP service account from PLAN-cloud.md C1)
+  - `garden-bot-repo` — fields: `type` (= `git`), `url` (= repo HTTPS URL), `username`, `password` (GitHub PAT) — for ArgoCD repo access
 
 ## Session L1 — Terraform bootstrap + ArgoCD wiring
 
-Terraform creates the two resources ArgoCD can't self-bootstrap: the namespace and the ArgoCD Application that tells ArgoCD to sync this repo's manifests.
+Terraform creates the resources ArgoCD can't self-bootstrap: the namespace, NFS PV, ArgoCD repo credential (so ArgoCD can pull from this repo with the GitHub PAT), and the ArgoCD Application.
 
 ### Terraform (`local/terraform/`)
 
@@ -84,6 +94,59 @@ resource "kubernetes_persistent_volume" "minio_nfs" {
         server = var.nas_ip
         path   = var.nas_nfs_path
       }
+    }
+  }
+}
+
+resource "kubernetes_manifest" "argocd_repo_credential" {
+  manifest = {
+    apiVersion = "external-secrets.io/v1"
+    kind       = "ExternalSecret"
+
+    metadata = {
+      name      = "garden-bot-repo"
+      namespace = "argocd"
+    }
+
+    spec = {
+      refreshInterval = "1h"
+
+      secretStoreRef = {
+        name = "onepassword"
+        kind = "ClusterSecretStore"
+      }
+
+      target = {
+        name           = "garden-bot-repo"
+        creationPolicy = "Owner"
+
+        template = {
+          metadata = {
+            labels = {
+              "argocd.argoproj.io/secret-type" = "repository"
+            }
+          }
+        }
+      }
+
+      data = [
+        {
+          secretKey = "type"
+          remoteRef = { key = "garden-bot-repo/type" }
+        },
+        {
+          secretKey = "url"
+          remoteRef = { key = "garden-bot-repo/url" }
+        },
+        {
+          secretKey = "username"
+          remoteRef = { key = "garden-bot-repo/username" }
+        },
+        {
+          secretKey = "password"
+          remoteRef = { key = "garden-bot-repo/password" }
+        },
+      ]
     }
   }
 }
@@ -155,7 +218,7 @@ variable "minio_nfs_capacity" {
 }
 ```
 
-State is local (only two resources; no remote backend needed). Add `*.tfstate*` and `.terraform/` to `.gitignore`.
+State is local (a handful of bootstrap resources; no remote backend needed). Add `*.tfstate*` and `.terraform/` to `.gitignore`.
 
 ### Application manifests — ExternalSecrets
 
@@ -678,7 +741,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: analyzer
-          image: <registry>/garden-analyzer:<tag>
+          image: 192.168.1.10:5000/garden-analyzer:<tag>
           ports:
             - containerPort: 8080
               name: http
@@ -753,7 +816,14 @@ spec:
 
 ### Container image
 
-Build with a Dockerfile in `local/analyzer/`. Push to a registry the cluster can pull from (GitHub Container Registry, or a local registry if preferred). Image should be minimal (python:3.12-slim base).
+Build with a Dockerfile in `local/analyzer/`. Push to the NAS registry:
+
+```bash
+docker build -t 192.168.1.10:5000/garden-analyzer:latest local/analyzer/
+docker push 192.168.1.10:5000/garden-analyzer:latest
+```
+
+Image should be minimal (`python:3.12-slim` base).
 
 **Done when**: an upload to MinIO `garden-images` results in a correct Postgres row in `plant_metrics`, end to end in-cluster.
 
@@ -792,7 +862,51 @@ spec:
           port: 3000
 ```
 
-**Done when**: dashboard at `https://garden.homelab.bertbullough.com` reflects new captures live.
+### Prometheus integration
+
+The cluster already runs kube-prometheus-stack. Add `ServiceMonitor` resources so Prometheus scrapes garden bot services.
+
+`servicemonitor.yaml`:
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: minio
+  namespace: garden
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: minio
+  endpoints:
+    - port: api
+      path: /minio/v2/metrics/cluster
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: analyzer
+  namespace: garden
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: analyzer
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+```
+
+The analyzer should expose a `/metrics` endpoint (Prometheus client library). MinIO exposes metrics natively. Postgres metrics can be added later via `postgres_exporter` sidecar if needed.
+
+The `release: kube-prometheus-stack` label ensures the existing Prometheus instance discovers these ServiceMonitors (it's the label selector used by the Prometheus operator in the homelab).
+
+**Done when**: dashboard at `https://garden.homelab.bertbullough.com` reflects new captures live; Prometheus is scraping MinIO and analyzer metrics.
 
 ## Session L6 — Sampling + sync (produces the cloud tier's input)
 
@@ -832,14 +946,14 @@ Run: `cd local/analyzer && python -m pytest tests/ -v`
 local/
 ├── terraform/                     # Terraform bootstrap (run once)
 │   ├── providers.tf               # kubernetes provider
-│   ├── main.tf                    # namespace + ArgoCD Application
-│   └── variables.tf               # repo_url
+│   ├── main.tf                    # namespace, NFS PV, ArgoCD repo credential + Application
+│   └── variables.tf               # repo_url, NAS config
 └── manifests/                     # ArgoCD syncs everything here
     ├── externalsecret.yaml        # MinIO, Postgres, GCP SA secrets
-    ├── minio-pvc.yaml
+    ├── minio-pvc.yaml             # NFS PVC (binds to Terraform-created PV)
     ├── minio-deployment.yaml
     ├── minio-service.yaml
-    ├── postgres-pvc.yaml
+    ├── postgres-pvc.yaml          # Longhorn PVC
     ├── postgres-deployment.yaml
     ├── postgres-service.yaml
     ├── init-db-job.yaml           # table + bucket creation (optional if analyzer does it)
@@ -849,10 +963,11 @@ local/
     ├── grafana-service.yaml
     ├── grafana-ingress.yaml       # Traefik IngressRoute
     ├── grafana-config.yaml        # ConfigMap: datasource + dashboard provisioning
+    ├── servicemonitor.yaml        # Prometheus scraping for MinIO + analyzer
     └── networkpolicy.yaml         # all four services
 ```
 
-No changes to the homelab repo are required. Terraform creates the namespace and ArgoCD Application directly.
+No changes to the homelab repo are required. Terraform creates the namespace, NFS PV, repo credential, and ArgoCD Application directly.
 
 ## Out of scope here
 
