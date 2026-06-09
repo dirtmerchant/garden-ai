@@ -1,0 +1,3 @@
+# Capture a still every 15 minutes during daylight hours (6am–8pm UTC).
+# Adjust times for your location.
+*/15 6-20 * * * /usr/bin/python3 /home/pi/garden_bot/pi/capture.py >> /home/pi/capture.log 2>&1

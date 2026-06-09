@@ -22,7 +22,9 @@ Build this tier **first**. It is a complete, useful system on its own; the cloud
 - k3s cluster reachable; `kubectl` context set (kubeconfig for the kubernetes Terraform provider).
 - ArgoCD running in the cluster (already deployed via the homelab repo).
 - External Secrets Operator + `ClusterSecretStore` named `onepassword` (1Password `Homelab` vault) — already deployed.
-- **Synology NAS NFS share**: create a shared folder (e.g. `/volume1/garden-minio`) on the DS218+ (192.168.1.10). Enable NFS, grant read/write access to the NUC IPs (192.168.1.20–22). Set `squash` to `no_root_squash` or map to a UID/GID matching MinIO's container user (1000:1000).
+- **Synology NAS NFS shares**: create two shared folders on the DS218+ (192.168.1.10):
+  1. `/volume1/garden-minio` — MinIO data store. Enable NFS, grant read/write to NUC IPs (192.168.1.20–22). Set `squash` to `no_root_squash` or map to UID/GID 1000:1000 (MinIO container user).
+  2. `/volume1/garden-landing` — Pi capture landing zone. Enable NFS, grant read/write to NUC IPs (for the ingest job) and to the Pi's IP (for capture writes). The Pi mounts this share (e.g. at `/mnt/garden-landing`).
 - **Docker Registry on NAS**: run the `registry:2` container via Synology Container Manager on port 5000. Map a volume for image storage (e.g. `/volume1/docker-registry:/var/lib/registry`). Configure each k3s node's `/etc/rancher/k3s/registries.yaml`:
   ```yaml
   mirrors:
@@ -349,7 +351,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: minio
-          image: minio/minio:<pin-version>
+          image: minio/minio:latest
           args: ["server", "/data", "--console-address", ":9001"]
           ports:
             - containerPort: 9000
@@ -469,7 +471,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: postgres
-          image: postgres:<pin-version>
+          image: postgres:latest
           ports:
             - containerPort: 5432
               name: postgres
@@ -688,14 +690,14 @@ Configure the webhook target either:
 ### Hardware constraints (resolved)
 
 - **Board**: Raspberry Pi Model A+ v1 — single-core ARMv6, 512MB RAM, single USB port, no onboard networking. USB WiFi dongle required.
-- **Camera**: Naturebytes Wildlife Camera Kit module (CSI ribbon cable, not an official Pi camera). Use the legacy camera stack (`raspistill`) or `libcamera-still` depending on the OS image — verify which is available on the Pi's Raspbian version.
+- **Camera**: Naturebytes Wildlife Camera Kit module (CSI ribbon cable, not an official Pi camera). Greenfield unit — no OS yet. Install Raspberry Pi OS Lite (Bookworm, 32-bit) for ARMv6 compatibility; use `rpicam-still` (the Bookworm-era replacement for `raspistill`).
 - **PIR sensor**: wired but unused; captures are cron-scheduled.
 
 ### Capture script
 
 `pi/capture.py`: capture a still, key it `YYYY/MM/DD/HHMMSS.jpg` (UTC), write to the NAS landing zone.
 
-- Invoke the camera via subprocess (`raspistill -o <path>` or `libcamera-still -o <path>`).
+- Invoke the camera via subprocess (`rpicam-still -o <path>`).
 - Write directly to a mounted NAS share (NFS or SMB from the Synology DS218+, e.g. mounted at `/mnt/garden-landing`).
 - No MinIO or S3 client needed on the Pi — the Pi just writes a file to the NAS mount.
 - `crontab.example` for capture interval; pinned `requirements.txt`.
@@ -710,10 +712,6 @@ A k3s-side ingest process watches the NAS landing zone and moves images into Min
 - Option A is simpler and sufficient given capture intervals (every few minutes at most).
 
 The NAS landing zone NFS share needs its own PV/PVC in the `garden` namespace (separate from MinIO's NFS share), or the ingest job can access the NAS share directly.
-
-### Open decision
-
-NAS as transient staging buffer (MinIO authoritative, landing zone cleared after ingest) vs. NAS as authoritative store (MinIO dropped, analyzer reads from NAS directly). Current plan assumes the staging-buffer approach. Revisit if MinIO adds unnecessary complexity for the image volumes involved.
 
 - **Done when**: running `capture.py` on the Pi writes a correctly-keyed image to the NAS landing zone, and the ingest process moves it into MinIO `garden-images`.
 

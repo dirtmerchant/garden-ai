@@ -1,0 +1,101 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: analyzer
+  namespace: garden
+  labels:
+    app: analyzer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: analyzer
+  template:
+    metadata:
+      labels:
+        app: analyzer
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: analyzer
+          image: 192.168.1.10:5000/garden-analyzer:latest
+          ports:
+            - containerPort: 8080
+              name: http
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: MINIO_ENDPOINT
+              value: minio.garden.svc.cluster.local:9000
+            - name: MINIO_BUCKET
+              value: garden-images
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-secret
+                  key: root-user
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-secret
+                  key: root-password
+            - name: POSTGRES_HOST
+              value: postgres.garden.svc.cluster.local
+            - name: POSTGRES_DB
+              value: garden
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: postgres-password
+            - name: GCS_BUCKET
+              value: garden-monitor-images
+            - name: BQ_DATASET
+              value: garden_monitor
+            - name: BQ_TABLE
+              value: plant_metrics
+            - name: GCP_PROJECT
+              value: garden-ai-467116
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /secrets/gcp/sa-key.json
+            - name: SYNC_ENABLED
+              value: "true"
+            - name: SAMPLE_NOON_HOUR_UTC
+              value: "18"
+            - name: SAMPLE_RATIO_THRESHOLD
+              value: "0.05"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            periodSeconds: 30
+          volumeMounts:
+            - name: gcp-sa
+              mountPath: /secrets/gcp
+              readOnly: true
+      volumes:
+        - name: gcp-sa
+          secret:
+            secretName: gcp-sa-secret

@@ -1,0 +1,108 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: init-minio-bucket
+  namespace: garden
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 5
+  template:
+    metadata:
+      labels:
+        app: init-minio
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      restartPolicy: OnFailure
+      containers:
+        - name: mc
+          image: minio/mc:RELEASE.2025-05-21T01-59-54Z
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: minio-secret
+                  key: root-user
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: minio-secret
+                  key: root-password
+          command:
+            - /bin/sh
+            - -c
+            - |
+              mc alias set local http://minio.garden.svc.cluster.local:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" &&
+              mc mb --ignore-existing local/garden-images &&
+              mc event add local/garden-images arn:minio:sqs::ANALYZER:webhook --event put --ignore-existing &&
+              echo "Bucket and webhook configured."
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: init-postgres-schema
+  namespace: garden
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 5
+  template:
+    metadata:
+      labels:
+        app: init-postgres
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      restartPolicy: OnFailure
+      containers:
+        - name: psql
+          image: postgres:16-alpine
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: postgres-password
+          command:
+            - psql
+            - -h
+            - postgres.garden.svc.cluster.local
+            - -U
+            - postgres
+            - -d
+            - garden
+            - -c
+            - |
+              CREATE TABLE IF NOT EXISTS plant_metrics (
+                capture_time      TIMESTAMPTZ NOT NULL,
+                ingest_time       TIMESTAMPTZ NOT NULL DEFAULT now(),
+                image_key         TEXT        NOT NULL UNIQUE,
+                green_pixel_ratio DOUBLE PRECISION NOT NULL,
+                image_width       INTEGER     NOT NULL,
+                image_height      INTEGER     NOT NULL,
+                synced_to_gcs     BOOLEAN     NOT NULL DEFAULT false,
+                device_id         TEXT        NOT NULL DEFAULT 'pi-01'
+              );
+              CREATE INDEX IF NOT EXISTS idx_plant_metrics_capture_time
+                ON plant_metrics (capture_time);

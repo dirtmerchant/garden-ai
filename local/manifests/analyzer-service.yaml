@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: analyzer
+  namespace: garden
+spec:
+  type: ClusterIP
+  selector:
+    app: analyzer
+  ports:
+    - port: 8080
+      targetPort: http

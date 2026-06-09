@@ -1,0 +1,2 @@
+# No external dependencies — stdlib only.
+# rpicam-still is invoked via subprocess (system package).

@@ -52,7 +52,7 @@ Pi (capture + key) ──▶ NAS landing zone ──▶ k3s (MinIO + analyzer)
 
 - Image key `YYYY/MM/DD/HHMMSS.jpg` (UTC) is set at capture time on the Pi, survives the hop through the NAS into MinIO/GCS.
 - Pi writes to a NAS landing zone (e.g. NFS or SMB share on the Synology DS218+). A k3s-side ingest process moves images from the landing zone into MinIO `garden-images`.
-- **Open decision**: NAS as transient staging buffer (MinIO authoritative, landing zone cleared after ingest) vs. NAS as authoritative store (MinIO dropped, analyzer reads from NAS directly). Affects sync contract and cross-tier join story. Current plan assumes the staging-buffer approach (MinIO authoritative).
+- **Decided**: NAS is a transient staging buffer; MinIO is authoritative. Landing zone is cleared after ingest.
 
 ### k3s home lab
 
