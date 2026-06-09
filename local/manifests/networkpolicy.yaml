@@ -15,6 +15,9 @@ spec:
         - podSelector:
             matchLabels:
               app: analyzer
+        - podSelector:
+            matchLabels:
+              app: ingest
       ports:
         - protocol: TCP
           port: 9000

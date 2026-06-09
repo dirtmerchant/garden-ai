@@ -16,6 +16,12 @@ variable "nas_nfs_path" {
   default     = "/volume1/garden-minio"
 }
 
+variable "nas_landing_path" {
+  description = "NFS export path on the NAS for the Pi capture landing zone"
+  type        = string
+  default     = "/volume1/garden-landing"
+}
+
 variable "minio_nfs_capacity" {
   description = "Capacity to advertise for the MinIO NFS PV"
   type        = string

@@ -32,6 +32,28 @@ resource "kubernetes_persistent_volume" "minio_nfs" {
   }
 }
 
+resource "kubernetes_persistent_volume" "landing_zone_nfs" {
+  metadata {
+    name = "landing-zone-nfs"
+  }
+
+  spec {
+    capacity = {
+      storage = "10Gi"
+    }
+
+    access_modes                     = ["ReadWriteOnce"]
+    persistent_volume_reclaim_policy = "Retain"
+
+    persistent_volume_source {
+      nfs {
+        server = var.nas_ip
+        path   = var.nas_landing_path
+      }
+    }
+  }
+}
+
 resource "kubernetes_manifest" "argocd_repo_credential" {
   manifest = {
     apiVersion = "external-secrets.io/v1"
