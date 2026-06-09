@@ -1,7 +1,7 @@
 variable "repo_url" {
   description = "Git repository URL for the garden-bot source"
   type        = string
-  default     = "https://github.com/dirtmerchant/garden_bot.git"
+  default     = "https://github.com/dirtmerchant/garden_ai.git"
 }
 
 variable "nas_ip" {
