@@ -59,7 +59,7 @@ Pi (capture + key) ──▶ NAS landing zone ──▶ k3s (MinIO + analyzer)
 #### Hardware
 - 3× Intel NUC7i7BNH, 32GB RAM / 256GB SSD each (96GB / 768GB total), Ubuntu 24.04.4 LTS.
 - k3s v1.34.3+k3s1. nuc1 (192.168.1.20) is server (control-plane + etcd); nuc2 (.21) and nuc3 (.22) are agents.
-- Synology DS218+ NAS (192.168.1.10): 6GB RAM, ~11TB RAID 1 + 15TB USB backup. Provides NFS-backed storage for MinIO (garden image history) and runs the **Docker Registry** (`192.168.1.10:5000`) for container images.
+- Synology DS218+ NAS (192.168.1.10): 6GB RAM, ~11TB RAID 1 + 15TB USB backup. Provides NFS-backed storage for MinIO (garden image history) and runs the **Docker Registry** (`192.168.1.10:5050`) for container images.
 
 #### Network
 - Flat LAN 192.168.1.0/24. Gateway/DHCP: Google Fiber router at .1.
@@ -184,7 +184,7 @@ In BigQuery, partition by `DATE(capture_time)`. In Postgres, index on `capture_t
 
 ### Local deployment (Terraform + ArgoCD)
 
-- **Container registry**: Docker Registry on the Synology NAS at `192.168.1.10:5000`. k3s nodes configured via `/etc/rancher/k3s/registries.yaml` to allow this as an HTTP (non-TLS) registry. Push analyzer images here.
+- **Container registry**: Docker Registry on the Synology NAS at `192.168.1.10:5050`. k3s nodes configured via `/etc/rancher/k3s/registries.yaml` to allow this as an HTTP (non-TLS) registry. Push analyzer images here.
 - **Terraform** (`local/terraform/`) bootstraps the platform: creates the `garden` namespace, an NFS PersistentVolume for MinIO (backed by the Synology NAS), an ArgoCD repo credential for this repo, and an ArgoCD `Application` resource pointing to `local/manifests/`. Run once with `terraform apply`. State is local.
 - **ArgoCD** syncs `local/manifests/` — all application workloads (deployments, services, PVCs, ExternalSecrets, IngressRoutes, NetworkPolicies). Automated sync with prune + self-heal.
 - Secrets via External Secrets Operator (1Password `Homelab` vault, `ClusterSecretStore` named `onepassword`).

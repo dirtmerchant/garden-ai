@@ -8,7 +8,7 @@ Build this tier **first**. It is a complete, useful system on its own; the cloud
 
 - **IaC split**: Terraform bootstraps the platform (namespace, ArgoCD Application); ArgoCD manages the application workloads. Standard pattern — Terraform handles what ArgoCD can't self-bootstrap, ArgoCD handles everything that benefits from continuous reconciliation.
 - **Terraform** lives in `local/terraform/`. Uses the `kubernetes` provider against the k3s cluster. Creates the `garden` namespace, NFS PV, ArgoCD repo credential, and the ArgoCD `Application` resource. No homelab repo changes needed.
-- **Container registry**: Docker Registry on the Synology NAS at `192.168.1.10:5000`. Runs as a container via Synology Container Manager. k3s nodes configured via `/etc/rancher/k3s/registries.yaml` to allow it as an HTTP registry. Analyzer images pushed here.
+- **Container registry**: Docker Registry on the Synology NAS at `192.168.1.10:5050`. Runs as a container via Synology Container Manager. k3s nodes configured via `/etc/rancher/k3s/registries.yaml` to allow it as an HTTP registry. Analyzer images pushed here.
 - **ArgoCD** syncs `local/manifests/` — deployments, services, PVCs, ExternalSecrets, ConfigMaps, IngressRoutes, NetworkPolicies. Automated sync with prune + self-heal, matching the existing cluster pattern.
 - **Grafana**: Dedicated instance for the garden bot (not a datasource on the cluster Grafana). Keeps this project fully self-contained.
 - **Storage**: MinIO backed by the **Synology NAS** (192.168.1.10) via NFS — ~11TB RAID 1 capacity, more than enough for the full image history. Terraform creates the NFS PersistentVolume (infrastructure concern); ArgoCD manages the PVC. Postgres stays on **Longhorn** (small dataset, benefits from SSD latency, 3× replication).
@@ -28,9 +28,9 @@ Build this tier **first**. It is a complete, useful system on its own; the cloud
 - **Docker Registry on NAS**: run the `registry:2` container via Synology Container Manager on port 5000. Map a volume for image storage (e.g. `/volume1/docker-registry:/var/lib/registry`). Configure each k3s node's `/etc/rancher/k3s/registries.yaml`:
   ```yaml
   mirrors:
-    "192.168.1.10:5000":
+    "192.168.1.10:5050":
       endpoint:
-        - "http://192.168.1.10:5000"
+        - "http://192.168.1.10:5050"
   ```
   Then restart k3s on each node (`sudo systemctl restart k3s` / `k3s-agent`).
 - Create 1Password items in the `Homelab` vault (if not already present):
@@ -766,7 +766,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: analyzer
-          image: 192.168.1.10:5000/garden-analyzer:<tag>
+          image: 192.168.1.10:5050/garden-analyzer:<tag>
           ports:
             - containerPort: 8080
               name: http
@@ -844,8 +844,8 @@ spec:
 Build with a Dockerfile in `local/analyzer/`. Push to the NAS registry:
 
 ```bash
-docker build -t 192.168.1.10:5000/garden-analyzer:latest local/analyzer/
-docker push 192.168.1.10:5000/garden-analyzer:latest
+docker build -t 192.168.1.10:5050/garden-analyzer:latest local/analyzer/
+docker push 192.168.1.10:5050/garden-analyzer:latest
 ```
 
 Image should be minimal (`python:3.12-slim` base).
