@@ -1,5 +1,5 @@
 variable "repo_url" {
-  description = "Git repository URL for the garden-bot source"
+  description = "Git repository URL for the garden-ai source"
   type        = string
 }
 

@@ -37,7 +37,7 @@ Build this tier **first**. It is a complete, useful system on its own; the cloud
   - `minio` — fields: `root-user`, `root-password`
   - `garden-postgres` — fields: `postgres-password`
   - `garden-gcp-sa` — fields: `sa-key` (JSON key for the GCP service account from PLAN-cloud.md C1)
-  - `garden-bot-repo` — fields: `type` (= `git`), `url` (= repo HTTPS URL), `username`, `password` (GitHub PAT) — for ArgoCD repo access
+  - `garden-ai-repo` — fields: `type` (= `git`), `url` (= repo HTTPS URL), `username`, `password` (GitHub PAT) — for ArgoCD repo access
 
 ## Session L1 — Terraform bootstrap + ArgoCD wiring
 
@@ -106,7 +106,7 @@ resource "kubernetes_manifest" "argocd_repo_credential" {
     kind       = "ExternalSecret"
 
     metadata = {
-      name      = "garden-bot-repo"
+      name      = "garden-ai-repo"
       namespace = "argocd"
     }
 
@@ -119,7 +119,7 @@ resource "kubernetes_manifest" "argocd_repo_credential" {
       }
 
       target = {
-        name           = "garden-bot-repo"
+        name           = "garden-ai-repo"
         creationPolicy = "Owner"
 
         template = {
@@ -134,19 +134,19 @@ resource "kubernetes_manifest" "argocd_repo_credential" {
       data = [
         {
           secretKey = "type"
-          remoteRef = { key = "garden-bot-repo/type" }
+          remoteRef = { key = "garden-ai-repo/type" }
         },
         {
           secretKey = "url"
-          remoteRef = { key = "garden-bot-repo/url" }
+          remoteRef = { key = "garden-ai-repo/url" }
         },
         {
           secretKey = "username"
-          remoteRef = { key = "garden-bot-repo/username" }
+          remoteRef = { key = "garden-ai-repo/username" }
         },
         {
           secretKey = "password"
-          remoteRef = { key = "garden-bot-repo/password" }
+          remoteRef = { key = "garden-ai-repo/password" }
         },
       ]
     }
@@ -159,7 +159,7 @@ resource "kubernetes_manifest" "argocd_application" {
     kind       = "Application"
 
     metadata = {
-      name      = "garden-bot"
+      name      = "garden-ai"
       namespace = "argocd"
 
       finalizers = [
@@ -196,9 +196,9 @@ resource "kubernetes_manifest" "argocd_application" {
 
 ```hcl
 variable "repo_url" {
-  description = "Git repository URL for the garden-bot source"
+  description = "Git repository URL for the garden-ai source"
   type        = string
-  default     = "https://github.com/<GITHUB_USER>/garden_bot.git"
+  default     = "https://github.com/<GITHUB_USER>/garden-ai.git"
 }
 
 variable "nas_ip" {
@@ -296,7 +296,7 @@ terraform apply    # creates namespace + registers ArgoCD app
 
 ArgoCD then auto-syncs `local/manifests/` into the `garden` namespace. From this point, all workload changes go through Git → ArgoCD.
 
-**Done when**: `terraform apply` is clean (namespace, NFS PV, and ArgoCD Application created), ArgoCD shows `garden-bot` app synced and healthy, ExternalSecrets resolve into k8s Secrets.
+**Done when**: `terraform apply` is clean (namespace, NFS PV, and ArgoCD Application created), ArgoCD shows `garden-ai` app synced and healthy, ExternalSecrets resolve into k8s Secrets.
 
 ## Session L2 — MinIO + Postgres
 

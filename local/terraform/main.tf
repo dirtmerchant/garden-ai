@@ -60,7 +60,7 @@ resource "kubernetes_manifest" "argocd_repo_credential" {
     kind       = "ExternalSecret"
 
     metadata = {
-      name      = "garden-bot-repo"
+      name      = "garden-ai-repo"
       namespace = "argocd"
     }
 
@@ -73,7 +73,7 @@ resource "kubernetes_manifest" "argocd_repo_credential" {
       }
 
       target = {
-        name           = "garden-bot-repo"
+        name           = "garden-ai-repo"
         creationPolicy = "Owner"
 
         template = {
@@ -88,19 +88,19 @@ resource "kubernetes_manifest" "argocd_repo_credential" {
       data = [
         {
           secretKey = "type"
-          remoteRef = { key = "garden-bot-repo", property = "type" }
+          remoteRef = { key = "garden-ai-repo", property = "type" }
         },
         {
           secretKey = "url"
-          remoteRef = { key = "garden-bot-repo", property = "url" }
+          remoteRef = { key = "garden-ai-repo", property = "url" }
         },
         {
           secretKey = "username"
-          remoteRef = { key = "garden-bot-repo", property = "username" }
+          remoteRef = { key = "garden-ai-repo", property = "username" }
         },
         {
           secretKey = "password"
-          remoteRef = { key = "garden-bot-repo", property = "password" }
+          remoteRef = { key = "garden-ai-repo", property = "password" }
         },
       ]
     }
@@ -113,7 +113,7 @@ resource "kubernetes_manifest" "argocd_application" {
     kind       = "Application"
 
     metadata = {
-      name      = "garden-bot"
+      name      = "garden-ai"
       namespace = "argocd"
 
       finalizers = [
