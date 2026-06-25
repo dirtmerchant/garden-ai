@@ -52,14 +52,14 @@ resource "google_bigquery_table" "plant_metrics" {
   }
 
   schema = jsonencode([
-    { name = "capture_time",      type = "TIMESTAMP", mode = "REQUIRED" },
-    { name = "ingest_time",       type = "TIMESTAMP", mode = "REQUIRED" },
-    { name = "image_key",         type = "STRING",    mode = "REQUIRED" },
-    { name = "green_pixel_ratio", type = "FLOAT",     mode = "REQUIRED" },
-    { name = "image_width",       type = "INTEGER",   mode = "REQUIRED" },
-    { name = "image_height",      type = "INTEGER",   mode = "REQUIRED" },
-    { name = "synced_to_gcs",     type = "BOOLEAN",   mode = "REQUIRED" },
-    { name = "device_id",         type = "STRING",    mode = "REQUIRED" },
+    { name = "capture_time", type = "TIMESTAMP", mode = "REQUIRED" },
+    { name = "ingest_time", type = "TIMESTAMP", mode = "REQUIRED" },
+    { name = "image_key", type = "STRING", mode = "REQUIRED" },
+    { name = "green_pixel_ratio", type = "FLOAT", mode = "REQUIRED" },
+    { name = "image_width", type = "INTEGER", mode = "REQUIRED" },
+    { name = "image_height", type = "INTEGER", mode = "REQUIRED" },
+    { name = "synced_to_gcs", type = "BOOLEAN", mode = "REQUIRED" },
+    { name = "device_id", type = "STRING", mode = "REQUIRED" },
   ])
 }
 

@@ -9,7 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 LANDING_ZONE = os.environ.get("LANDING_ZONE", "/mnt/garden-landing")
@@ -20,14 +20,16 @@ def capture_image(output_path: str) -> None:
     cmd = [
         "rpicam-still",
         "--nopreview",
-        "--timeout", "2000",
-        "--output", output_path,
+        "--timeout",
+        "2000",
+        "--output",
+        output_path,
     ]
     subprocess.run(cmd, check=True, timeout=30)
 
 
 def main() -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     # Key convention: YYYY/MM/DD/HHMMSS.jpg (UTC)
     relative_key = now.strftime("%Y/%m/%d/%H%M%S.jpg")
     dest = Path(LANDING_ZONE) / relative_key
@@ -36,9 +38,7 @@ def main() -> None:
 
     # Capture to a temp file first, then move — avoids partial files in the
     # landing zone if the camera fails mid-write.
-    with tempfile.NamedTemporaryFile(
-        suffix=".jpg", dir=dest.parent, delete=False
-    ) as tmp:
+    with tempfile.NamedTemporaryFile(suffix=".jpg", dir=dest.parent, delete=False) as tmp:
         tmp_path = tmp.name
 
     try:

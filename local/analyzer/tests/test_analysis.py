@@ -2,9 +2,8 @@
 
 import numpy as np
 import pytest
+from analysis import compute_green_pixel_ratio, should_sample
 from PIL import Image
-
-from analysis import AnalysisResult, compute_green_pixel_ratio, should_sample
 
 
 # ---------------------------------------------------------------------------

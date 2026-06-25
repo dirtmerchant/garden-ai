@@ -7,15 +7,14 @@ from __future__ import annotations
 import io
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import psycopg2
+from analysis import AnalysisResult, compute_green_pixel_ratio, should_sample
 from flask import Flask, Response, jsonify, request
 from minio import Minio
 from PIL import Image
 from prometheus_client import Counter, Histogram, generate_latest
-
-from analysis import AnalysisResult, compute_green_pixel_ratio, should_sample
 from sync import push_image_to_gcs, push_metric_to_bq
 
 logging.basicConfig(
@@ -143,8 +142,7 @@ def get_previous_ratio() -> float | None:
     conn = get_pg()
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT green_pixel_ratio FROM plant_metrics "
-            "ORDER BY capture_time DESC LIMIT 1"
+            "SELECT green_pixel_ratio FROM plant_metrics ORDER BY capture_time DESC LIMIT 1"
         )
         row = cur.fetchone()
         return row[0] if row else None
@@ -166,7 +164,7 @@ def parse_capture_time(image_key: str) -> datetime:
     """Parse YYYY/MM/DD/HHMMSS.jpg -> datetime (UTC)."""
     # Strip extension and parse
     stem = image_key.rsplit(".", 1)[0]  # YYYY/MM/DD/HHMMSS
-    return datetime.strptime(stem, "%Y/%m/%d/%H%M%S").replace(tzinfo=timezone.utc)
+    return datetime.strptime(stem, "%Y/%m/%d/%H%M%S").replace(tzinfo=UTC)
 
 
 def process_image(image_key: str) -> None:
@@ -202,7 +200,7 @@ def process_image(image_key: str) -> None:
         # Always push metrics to BQ
         bq_row = {
             "capture_time": capture_time.isoformat(),
-            "ingest_time": datetime.now(timezone.utc).isoformat(),
+            "ingest_time": datetime.now(UTC).isoformat(),
             "image_key": image_key,
             "green_pixel_ratio": result.green_pixel_ratio,
             "image_width": result.width,
@@ -213,9 +211,8 @@ def process_image(image_key: str) -> None:
         push_metric_to_bq(bq_row)
 
         # Push sampled images to GCS
-        if sample:
-            if push_image_to_gcs(image_key, image_bytes):
-                synced = True
+        if sample and push_image_to_gcs(image_key, image_bytes):
+            synced = True
 
     # Persist locally (always succeeds independently of GCP)
     insert_metric(capture_time, image_key, result, synced)
@@ -223,7 +220,9 @@ def process_image(image_key: str) -> None:
 
     logger.info(
         "Done: %s ratio=%.4f synced=%s",
-        image_key, result.green_pixel_ratio, synced,
+        image_key,
+        result.green_pixel_ratio,
+        synced,
     )
 
 

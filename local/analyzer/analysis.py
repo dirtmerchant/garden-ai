@@ -59,8 +59,4 @@ def should_sample(
         return True
 
     # Significant-change sample.
-    if previous_ratio is not None:
-        if abs(current_ratio - previous_ratio) >= ratio_threshold:
-            return True
-
-    return False
+    return previous_ratio is not None and abs(current_ratio - previous_ratio) >= ratio_threshold
