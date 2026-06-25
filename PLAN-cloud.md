@@ -6,12 +6,12 @@ Build **after** the local tier is working — except Session C1, which must exis
 
 ## Prerequisites (one-time, before Session C1)
 
-- `gcloud` authenticated against project `garden-ai-467116`.
+- `gcloud` authenticated against project `<GCP_PROJECT>`.
 - APIs enabled: Cloud Storage, BigQuery, and (for the stretch goal) Vertex AI.
 - Terraform state bucket created:
   ```bash
-  gcloud storage buckets create gs://garden-ai-467116-tfstate \
-    --project=garden-ai-467116 \
+  gcloud storage buckets create gs://<GCP_PROJECT>-tfstate \
+    --project=<GCP_PROJECT> \
     --location=us-central1 \
     --uniform-bucket-level-access
   ```

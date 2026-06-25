@@ -7,3 +7,7 @@ __pycache__/
 *.pyc
 .venv/
 *.egg-info/
+.env
+.env.local
+*.tfvars
+!*.tfvars.example

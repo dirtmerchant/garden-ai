@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 GCS_BUCKET = os.environ.get("GCS_BUCKET", "garden-monitor-images")
 BQ_DATASET = os.environ.get("BQ_DATASET", "garden_monitor")
 BQ_TABLE = os.environ.get("BQ_TABLE", "plant_metrics")
-GCP_PROJECT = os.environ.get("GCP_PROJECT", "garden-ai-467116")
+GCP_PROJECT = os.environ.get("GCP_PROJECT", "")
 
 
 def push_metric_to_bq(row: dict) -> bool:

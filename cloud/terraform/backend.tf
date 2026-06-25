@@ -1,6 +1,6 @@
 terraform {
   backend "gcs" {
-    bucket = "garden-ai-467116-tfstate"
-    prefix = "garden-monitor"
+    # Configured via CLI: terraform init -backend-config="bucket=$TFSTATE_BUCKET" -backend-config="prefix=$TFSTATE_PREFIX"
+    # See .env.example for values.
   }
 }

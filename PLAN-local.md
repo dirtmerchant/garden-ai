@@ -8,32 +8,32 @@ Build this tier **first**. It is a complete, useful system on its own; the cloud
 
 - **IaC split**: Terraform bootstraps the platform (namespace, ArgoCD Application); ArgoCD manages the application workloads. Standard pattern — Terraform handles what ArgoCD can't self-bootstrap, ArgoCD handles everything that benefits from continuous reconciliation.
 - **Terraform** lives in `local/terraform/`. Uses the `kubernetes` provider against the k3s cluster. Creates the `garden` namespace, NFS PV, ArgoCD repo credential, and the ArgoCD `Application` resource. No homelab repo changes needed.
-- **Container registry**: Docker Registry on the Synology NAS at `192.168.1.10:5050`. Runs as a container via Synology Container Manager. k3s nodes configured via `/etc/rancher/k3s/registries.yaml` to allow it as an HTTP registry. Analyzer images pushed here.
+- **Container registry**: Docker Registry on the Synology NAS at `<DOCKER_REGISTRY>`. Runs as a container via Synology Container Manager. k3s nodes configured via `/etc/rancher/k3s/registries.yaml` to allow it as an HTTP registry. Analyzer images pushed here.
 - **ArgoCD** syncs `local/manifests/` — deployments, services, PVCs, ExternalSecrets, ConfigMaps, IngressRoutes, NetworkPolicies. Automated sync with prune + self-heal, matching the existing cluster pattern.
 - **Grafana**: Dedicated instance for the garden bot (not a datasource on the cluster Grafana). Keeps this project fully self-contained.
-- **Storage**: MinIO backed by the **Synology NAS** (192.168.1.10) via NFS — ~11TB RAID 1 capacity, more than enough for the full image history. Terraform creates the NFS PersistentVolume (infrastructure concern); ArgoCD manages the PVC. Postgres stays on **Longhorn** (small dataset, benefits from SSD latency, 3× replication).
-- **Secrets**: External Secrets Operator → 1Password `Homelab` vault, `ClusterSecretStore` named `onepassword`. Create 1Password items before deploying.
+- **Storage**: MinIO backed by the **Synology NAS** (<NAS_IP>) via NFS — ~11TB RAID 1 capacity, more than enough for the full image history. Terraform creates the NFS PersistentVolume (infrastructure concern); ArgoCD manages the PVC. Postgres stays on **Longhorn** (small dataset, benefits from SSD latency, 3× replication).
+- **Secrets**: External Secrets Operator → 1Password vault (see .env.example), `ClusterSecretStore` named `onepassword`. Create 1Password items before deploying.
 - **Namespace**: `garden` — created by Terraform.
-- **Ingress**: Traefik IngressRoute at `garden.homelab.bertbullough.com` for Grafana. Pi-hole dnsmasq already resolves `*.homelab.bertbullough.com`.
+- **Ingress**: Traefik IngressRoute at `garden.<DOMAIN>` for Grafana. Pi-hole dnsmasq already resolves `*.<DOMAIN>`.
 - **Network policies**: Follow the homelab pattern — ingress restricted to Traefik (for Grafana) and intra-namespace (analyzer ↔ MinIO/Postgres); egress unrestricted for services that need external access (sync to GCP).
 
 ## Prerequisites (one-time)
 
 - k3s cluster reachable; `kubectl` context set (kubeconfig for the kubernetes Terraform provider).
 - ArgoCD running in the cluster (already deployed via the homelab repo).
-- External Secrets Operator + `ClusterSecretStore` named `onepassword` (1Password `Homelab` vault) — already deployed.
-- **Synology NAS NFS shares**: create two shared folders on the DS218+ (192.168.1.10):
-  1. `/volume1/garden-minio` — MinIO data store. Enable NFS, grant read/write to NUC IPs (192.168.1.20–22). Set `squash` to `no_root_squash` or map to UID/GID 1000:1000 (MinIO container user).
+- External Secrets Operator + `ClusterSecretStore` named `onepassword` (1Password vault (see .env.example)) — already deployed.
+- **Synology NAS NFS shares**: create two shared folders on the DS218+ (<NAS_IP>):
+  1. `/volume1/garden-minio` — MinIO data store. Enable NFS, grant read/write to NUC IPs (<NUC_IPS>). Set `squash` to `no_root_squash` or map to UID/GID 1000:1000 (MinIO container user).
   2. `/volume1/garden-landing` — Pi capture landing zone. Enable NFS, grant read/write to NUC IPs (for the ingest job) and to the Pi's IP (for capture writes). The Pi mounts this share (e.g. at `/mnt/garden-landing`).
 - **Docker Registry on NAS**: run the `registry:2` container via Synology Container Manager on port 5000. Map a volume for image storage (e.g. `/volume1/docker-registry:/var/lib/registry`). Configure each k3s node's `/etc/rancher/k3s/registries.yaml`:
   ```yaml
   mirrors:
-    "192.168.1.10:5050":
+    "<DOCKER_REGISTRY>":
       endpoint:
-        - "http://192.168.1.10:5050"
+        - "http://<DOCKER_REGISTRY>"
   ```
   Then restart k3s on each node (`sudo systemctl restart k3s` / `k3s-agent`).
-- Create 1Password items in the `Homelab` vault (if not already present):
+- Create 1Password items in your vault (see `.env.example` for item names):
   - `minio` — fields: `root-user`, `root-password`
   - `garden-postgres` — fields: `postgres-password`
   - `garden-gcp-sa` — fields: `sa-key` (JSON key for the GCP service account from PLAN-cloud.md C1)
@@ -198,13 +198,13 @@ resource "kubernetes_manifest" "argocd_application" {
 variable "repo_url" {
   description = "Git repository URL for the garden-bot source"
   type        = string
-  default     = "https://github.com/dirtmerchant/garden_bot.git"
+  default     = "https://github.com/<GITHUB_USER>/garden_bot.git"
 }
 
 variable "nas_ip" {
   description = "Synology NAS IP address"
   type        = string
-  default     = "192.168.1.10"
+  default     = "<NAS_IP>"
 }
 
 variable "nas_nfs_path" {
@@ -573,7 +573,7 @@ spec:
     # NFS to Synology NAS
     - to:
         - ipBlock:
-            cidr: 192.168.1.10/32
+            cidr: <NAS_IP>/32
       ports:
         - protocol: TCP
           port: 2049
@@ -766,7 +766,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: analyzer
-          image: 192.168.1.10:5050/garden-analyzer:<tag>
+          image: <DOCKER_REGISTRY>/garden-analyzer:<tag>
           ports:
             - containerPort: 8080
               name: http
@@ -844,8 +844,8 @@ spec:
 Build with a Dockerfile in `local/analyzer/`. Push to the NAS registry:
 
 ```bash
-docker build -t 192.168.1.10:5050/garden-analyzer:latest local/analyzer/
-docker push 192.168.1.10:5050/garden-analyzer:latest
+docker build -t <DOCKER_REGISTRY>/garden-analyzer:latest local/analyzer/
+docker push <DOCKER_REGISTRY>/garden-analyzer:latest
 ```
 
 Image should be minimal (`python:3.12-slim` base).
@@ -877,7 +877,7 @@ spec:
     - websecure
   tls: {}
   routes:
-    - match: Host(`garden.homelab.bertbullough.com`)
+    - match: Host(`garden.<DOMAIN>`)
       kind: Rule
       middlewares:
         - name: security-headers
@@ -931,7 +931,7 @@ The analyzer should expose a `/metrics` endpoint (Prometheus client library). Mi
 
 The `release: kube-prometheus-stack` label ensures the existing Prometheus instance discovers these ServiceMonitors (it's the label selector used by the Prometheus operator in the homelab).
 
-**Done when**: dashboard at `https://garden.homelab.bertbullough.com` reflects new captures live; Prometheus is scraping MinIO and analyzer metrics.
+**Done when**: dashboard at `https://garden.<DOMAIN>` reflects new captures live; Prometheus is scraping MinIO and analyzer metrics.
 
 ## Session L6 — Sampling + sync (produces the cloud tier's input)
 

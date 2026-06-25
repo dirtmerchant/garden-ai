@@ -8,7 +8,7 @@ spec:
     - websecure
   tls: {}
   routes:
-    - match: Host(`garden.homelab.bertbullough.com`)
+    - match: Host(`CHANGE_ME_GRAFANA_HOSTNAME`)
       kind: Rule
       middlewares:
         - name: security-headers

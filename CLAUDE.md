@@ -58,25 +58,25 @@ Pi (capture + key) ──▶ NAS landing zone ──▶ k3s (MinIO + analyzer)
 
 #### Hardware
 - 3× Intel NUC7i7BNH, 32GB RAM / 256GB SSD each (96GB / 768GB total), Ubuntu 24.04.4 LTS.
-- k3s v1.34.3+k3s1. nuc1 (192.168.1.20) is server (control-plane + etcd); nuc2 (.21) and nuc3 (.22) are agents.
-- Synology DS218+ NAS (192.168.1.10): 6GB RAM, ~11TB RAID 1 + 15TB USB backup. Provides NFS-backed storage for MinIO (garden image history) and runs the **Docker Registry** (`192.168.1.10:5050`) for container images.
+- k3s v1.34.3+k3s1. nuc1 (<NUC1_IP>) is server (control-plane + etcd); nuc2 (<NUC2_IP>) and nuc3 (<NUC3_IP>) are agents.
+- Synology DS218+ NAS (<NAS_IP>): 6GB RAM, ~11TB RAID 1 + 15TB USB backup. Provides NFS-backed storage for MinIO (garden image history) and runs the **Docker Registry** (`<NAS_IP>:5050`) for container images.
 
 #### Network
-- Flat LAN 192.168.1.0/24. Gateway/DHCP: Google Fiber router at .1.
-- **MetalLB** L2 load balancer, IP pool 192.168.1.200–250.
-- **Traefik** ingress (192.168.1.202) with wildcard TLS cert for `*.homelab.bertbullough.com` (self-signed CA via cert-manager).
-- **Pi-hole** DNS at 192.168.1.200 with custom dnsmasq records for `*.homelab.bertbullough.com`.
-- **Tailscale** subnet router advertises 192.168.1.0/24 for remote access.
+- Flat LAN <SUBNET>. Gateway/DHCP: Google Fiber router at .1.
+- **MetalLB** L2 load balancer, IP pool <METALLB_POOL>.
+- **Traefik** ingress (<TRAEFIK_IP>) with wildcard TLS cert for `*.<DOMAIN>` (self-signed CA via cert-manager).
+- **Pi-hole** DNS at <PIHOLE_IP> with custom dnsmasq records for `*.<DOMAIN>`.
+- **Tailscale** subnet router advertises <SUBNET> for remote access.
 - UFW on all nodes; SSH key-only auth.
 
 #### Storage
 - **Longhorn** is the default StorageClass (3× replica distributed block storage). Used for Postgres PVC.
 - **local-path** also available (node-pinned, no replication) — used by some existing services.
-- **Synology NAS** (192.168.1.10) via NFS for MinIO image storage — ~11TB RAID 1 capacity. NFS PV created by Terraform; PVC binds to it. See PLAN-local.md for NFS share setup.
+- **Synology NAS** (<NAS_IP>) via NFS for MinIO image storage — ~11TB RAID 1 capacity. NFS PV created by Terraform; PVC binds to it. See PLAN-local.md for NFS share setup.
 
 #### GitOps & secrets
 - **ArgoCD** with app-of-apps pattern, auto-syncs from `main` branch. Pruning + self-heal enabled, sync waves for ordering.
-- **External Secrets Operator (ESO)** with 1Password SDK provider — no secrets in the repo. Garden bot secrets (MinIO creds, Postgres password, GCP SA key) should follow this pattern.
+- **External Secrets Operator (ESO)** with 1Password SDK provider — no secrets in the repo. Garden bot secrets (MinIO creds, Postgres password, GCP SA key) follow this pattern. See `.env.example` for vault/item names.
 
 #### Existing workloads (coexist with garden bot)
 | Service | Node affinity | Resources (request → limit) | PVC |
@@ -101,8 +101,8 @@ Substantial headroom remains for garden bot services (MinIO, Postgres, analyzer,
 - IaC: Terraform bootstraps namespace + ArgoCD Application; ArgoCD syncs workload manifests. See PLAN-local.md.
 
 ### GCP
-- Project ID: `garden-ai-467116`
-- Project number: `563978501450`
+- Project ID: `<GCP_PROJECT>`
+- Project number: `<GCP_PROJECT_NUMBER>`
 - Region: `us-central1`
 - GCS bucket (sampled images): `garden-monitor-images`
 - BigQuery dataset: `garden_monitor`, table: `plant_metrics`
@@ -179,15 +179,15 @@ In BigQuery, partition by `DATE(capture_time)`. In Postgres, index on `capture_t
 - Pin all dependencies.
 
 ### GCP Terraform
-- State backend: GCS, bucket `garden-ai-467116-tfstate`, prefix `garden-monitor`. Create the state bucket once before `terraform init`.
+- State backend: GCS, bucket `<TFSTATE_BUCKET>`, prefix `garden-monitor`. Create the state bucket once before `terraform init`.
 - Provisions only the cloud tier: GCS bucket, BigQuery dataset+table, and a least-privilege service account the local analyzer authenticates as to push.
 
 ### Local deployment (Terraform + ArgoCD)
 
-- **Container registry**: Docker Registry on the Synology NAS at `192.168.1.10:5050`. k3s nodes configured via `/etc/rancher/k3s/registries.yaml` to allow this as an HTTP (non-TLS) registry. Push analyzer images here.
+- **Container registry**: Docker Registry on the Synology NAS at `<NAS_IP>:5050`. k3s nodes configured via `/etc/rancher/k3s/registries.yaml` to allow this as an HTTP (non-TLS) registry. Push analyzer images here.
 - **Terraform** (`local/terraform/`) bootstraps the platform: creates the `garden` namespace, an NFS PersistentVolume for MinIO (backed by the Synology NAS), an ArgoCD repo credential for this repo, and an ArgoCD `Application` resource pointing to `local/manifests/`. Run once with `terraform apply`. State is local.
 - **ArgoCD** syncs `local/manifests/` — all application workloads (deployments, services, PVCs, ExternalSecrets, IngressRoutes, NetworkPolicies). Automated sync with prune + self-heal.
-- Secrets via External Secrets Operator (1Password `Homelab` vault, `ClusterSecretStore` named `onepassword`).
+- Secrets via External Secrets Operator (1Password vault, `ClusterSecretStore` named `onepassword`). See `.env.example` for vault/item names.
 - MinIO storage: NFS PV backed by Synology NAS. Postgres: Longhorn PVC (replicated SSD). Traefik IngressRoutes for dashboard access.
 - No changes to the homelab repo required.
 
@@ -212,7 +212,7 @@ terraform plan          # preview
 terraform apply         # provision GCS, BigQuery, service account
 ```
 
-State backend: GCS bucket `garden-ai-467116-tfstate`, prefix `garden-monitor`.
+State backend: GCS bucket `<TFSTATE_BUCKET>`, prefix `garden-monitor`.
 
 ### Terraform — local tier (bootstrap)
 
