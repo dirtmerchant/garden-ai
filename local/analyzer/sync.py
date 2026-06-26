@@ -23,7 +23,9 @@ def push_metric_to_bq(row: dict) -> bool:
     try:
         client = bigquery.Client(project=GCP_PROJECT)
         table_ref = f"{GCP_PROJECT}.{BQ_DATASET}.{BQ_TABLE}"
-        errors = client.insert_rows_json(table_ref, [row])
+        errors = client.insert_rows_json(
+            table_ref, [row], row_ids=[row.get("image_key", "")]
+        )
         if errors:
             logger.error("BigQuery insert errors: %s", errors)
             return False

@@ -7,6 +7,8 @@ from __future__ import annotations
 import io
 import logging
 import os
+import threading
+import time
 from datetime import UTC, datetime
 
 import psycopg2
@@ -40,6 +42,8 @@ SYNC_ENABLED = os.environ.get("SYNC_ENABLED", "true").lower() == "true"
 SAMPLE_NOON_HOUR_UTC = int(os.environ.get("SAMPLE_NOON_HOUR_UTC", "18"))
 SAMPLE_RATIO_THRESHOLD = float(os.environ.get("SAMPLE_RATIO_THRESHOLD", "0.05"))
 DEVICE_ID = os.environ.get("DEVICE_ID", "pi-01")
+RETRY_INTERVAL_SECONDS = int(os.environ.get("RETRY_INTERVAL_SECONDS", "300"))
+RETRY_BATCH_SIZE = int(os.environ.get("RETRY_BATCH_SIZE", "50"))
 
 # ---------------------------------------------------------------------------
 # Prometheus metrics
@@ -94,17 +98,24 @@ CREATE TABLE IF NOT EXISTS plant_metrics (
     image_width       INTEGER     NOT NULL,
     image_height      INTEGER     NOT NULL,
     synced_to_gcs     BOOLEAN     NOT NULL DEFAULT false,
+    synced_to_bq      BOOLEAN     NOT NULL DEFAULT false,
+    sample_selected   BOOLEAN     NOT NULL DEFAULT false,
     device_id         TEXT        NOT NULL DEFAULT 'pi-01'
 );
 CREATE INDEX IF NOT EXISTS idx_plant_metrics_capture_time
     ON plant_metrics (capture_time);
 """
 
+MIGRATE_SQL = """
+ALTER TABLE plant_metrics ADD COLUMN IF NOT EXISTS synced_to_bq BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE plant_metrics ADD COLUMN IF NOT EXISTS sample_selected BOOLEAN NOT NULL DEFAULT false;
+"""
+
 INSERT_SQL = """
 INSERT INTO plant_metrics
     (capture_time, image_key, green_pixel_ratio, image_width, image_height,
-     synced_to_gcs, device_id)
-VALUES (%s, %s, %s, %s, %s, %s, %s)
+     synced_to_gcs, synced_to_bq, sample_selected, device_id)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT (image_key) DO NOTHING;
 """
 
@@ -113,13 +124,17 @@ def ensure_schema() -> None:
     conn = get_pg()
     with conn.cursor() as cur:
         cur.execute(CREATE_TABLE_SQL)
+        cur.execute(MIGRATE_SQL)
 
 
 def insert_metric(
     capture_time: datetime,
     image_key: str,
     result: AnalysisResult,
-    synced: bool,
+    *,
+    synced_to_gcs: bool,
+    synced_to_bq: bool,
+    sample_selected: bool,
 ) -> None:
     conn = get_pg()
     with conn.cursor() as cur:
@@ -131,7 +146,9 @@ def insert_metric(
                 result.green_pixel_ratio,
                 result.width,
                 result.height,
-                synced,
+                synced_to_gcs,
+                synced_to_bq,
+                sample_selected,
                 DEVICE_ID,
             ),
         )
@@ -155,6 +172,47 @@ def mark_synced(image_key: str) -> None:
             "UPDATE plant_metrics SET synced_to_gcs = true WHERE image_key = %s",
             (image_key,),
         )
+
+
+def mark_bq_synced(image_key: str) -> None:
+    conn = get_pg()
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE plant_metrics SET synced_to_bq = true WHERE image_key = %s",
+            (image_key,),
+        )
+
+
+def get_unsynced_bq_rows(limit: int) -> list[dict]:
+    """Return rows not yet pushed to BigQuery."""
+    conn = get_pg()
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT capture_time, image_key, green_pixel_ratio,
+                      image_width, image_height, synced_to_gcs, device_id
+               FROM plant_metrics
+              WHERE synced_to_bq = false
+              ORDER BY capture_time
+              LIMIT %s""",
+            (limit,),
+        )
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def get_unsynced_gcs_keys(limit: int) -> list[str]:
+    """Return image keys selected for sampling but not yet pushed to GCS."""
+    conn = get_pg()
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT image_key
+               FROM plant_metrics
+              WHERE sample_selected = true AND synced_to_gcs = false
+              ORDER BY capture_time
+              LIMIT %s""",
+            (limit,),
+        )
+        return [row[0] for row in cur.fetchall()]
 
 
 # ---------------------------------------------------------------------------
@@ -187,9 +245,12 @@ def process_image(image_key: str) -> None:
     previous_ratio = get_previous_ratio()
 
     # Sync decision
-    synced = False
+    synced_to_gcs = False
+    synced_to_bq = False
+    sample_selected = False
+
     if SYNC_ENABLED:
-        sample = should_sample(
+        sample_selected = should_sample(
             current_ratio=result.green_pixel_ratio,
             previous_ratio=previous_ratio,
             capture_hour_utc=capture_time.hour,
@@ -205,24 +266,95 @@ def process_image(image_key: str) -> None:
             "green_pixel_ratio": result.green_pixel_ratio,
             "image_width": result.width,
             "image_height": result.height,
-            "synced_to_gcs": sample,
+            "synced_to_gcs": sample_selected,
             "device_id": DEVICE_ID,
         }
-        push_metric_to_bq(bq_row)
+        synced_to_bq = push_metric_to_bq(bq_row)
 
         # Push sampled images to GCS
-        if sample and push_image_to_gcs(image_key, image_bytes):
-            synced = True
+        if sample_selected and push_image_to_gcs(image_key, image_bytes):
+            synced_to_gcs = True
 
     # Persist locally (always succeeds independently of GCP)
-    insert_metric(capture_time, image_key, result, synced)
+    insert_metric(
+        capture_time,
+        image_key,
+        result,
+        synced_to_gcs=synced_to_gcs,
+        synced_to_bq=synced_to_bq,
+        sample_selected=sample_selected,
+    )
     IMAGES_PROCESSED.inc()
 
     logger.info(
-        "Done: %s ratio=%.4f synced=%s",
+        "Done: %s ratio=%.4f bq=%s gcs=%s sampled=%s",
         image_key,
         result.green_pixel_ratio,
-        synced,
+        synced_to_bq,
+        synced_to_gcs,
+        sample_selected,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Retry loop — best-effort, catches all exceptions
+# ---------------------------------------------------------------------------
+def retry_unsynced() -> None:
+    """Retry pushing unsynced metrics to BQ and sampled images to GCS."""
+    # Retry BQ
+    try:
+        rows = get_unsynced_bq_rows(RETRY_BATCH_SIZE)
+        if rows:
+            logger.info("Retrying %d unsynced BQ rows", len(rows))
+        for row in rows:
+            bq_row = {
+                "capture_time": row["capture_time"].isoformat(),
+                "ingest_time": datetime.now(UTC).isoformat(),
+                "image_key": row["image_key"],
+                "green_pixel_ratio": row["green_pixel_ratio"],
+                "image_width": row["image_width"],
+                "image_height": row["image_height"],
+                "synced_to_gcs": row["synced_to_gcs"],
+                "device_id": row["device_id"],
+            }
+            if push_metric_to_bq(bq_row):
+                mark_bq_synced(row["image_key"])
+    except Exception:
+        logger.exception("Error during BQ retry sweep")
+
+    # Retry GCS
+    try:
+        keys = get_unsynced_gcs_keys(RETRY_BATCH_SIZE)
+        if keys:
+            logger.info("Retrying %d unsynced GCS images", len(keys))
+        client = get_minio()
+        for key in keys:
+            try:
+                resp = client.get_object(MINIO_BUCKET, key)
+                image_bytes = resp.read()
+                resp.close()
+                resp.release_conn()
+                if push_image_to_gcs(key, image_bytes):
+                    mark_synced(key)
+            except Exception:
+                logger.exception("GCS retry failed for %s", key)
+    except Exception:
+        logger.exception("Error during GCS retry sweep")
+
+
+def start_retry_loop() -> None:
+    """Start a daemon thread that periodically retries unsynced pushes."""
+    def _loop():
+        while True:
+            time.sleep(RETRY_INTERVAL_SECONDS)
+            retry_unsynced()
+
+    thread = threading.Thread(target=_loop, daemon=True, name="sync-retry")
+    thread.start()
+    logger.info(
+        "Retry loop started (interval=%ds, batch=%d)",
+        RETRY_INTERVAL_SECONDS,
+        RETRY_BATCH_SIZE,
     )
 
 
@@ -268,6 +400,8 @@ def webhook():
 # ---------------------------------------------------------------------------
 with app.app_context():
     ensure_schema()
+    if SYNC_ENABLED:
+        start_retry_loop()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
